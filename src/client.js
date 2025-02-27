@@ -2,6 +2,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+require('dotenv').config();
 
 // Create readline interface for user input
 const rl = readline.createInterface({
@@ -10,11 +11,18 @@ const rl = readline.createInterface({
 });
 
 class CursorOperatorClient {
-  constructor(serverUrl = `http://localhost:${process.env.PORT || 3000}`) {
-    console.log(`Using server URL: ${serverUrl}, process.env.PORT: ${process.env.PORT}`);
-    this.serverUrl = serverUrl;
+  constructor(serverUrl) {
+    // 然后使用默认端口
+    const PORT = process.env.PORT || 3000;
+    
+    // 设置服务器 URL
+    this.serverUrl = serverUrl || `http://localhost:${PORT}`;
+    
+    // 调试输出
+    console.log(`Using server URL: ${this.serverUrl}, PORT=${PORT}, process.env.PORT=${process.env.PORT}`);
+    
     this.client = axios.create({
-      baseURL: serverUrl,
+      baseURL: this.serverUrl,
       timeout: 30000,
     });
   }
