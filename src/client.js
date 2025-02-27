@@ -121,7 +121,7 @@ class CursorOperatorClient {
         method: 'POST',
         url: `${this.serverUrl}/pair-program`,
         dataSize: screenCapture.length,
-        timeout: this.client.defaults.timeout
+        timeout: 6000000
       });
       
       try {
