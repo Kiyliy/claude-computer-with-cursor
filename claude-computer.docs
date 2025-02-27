@@ -1,0 +1,188 @@
+curl https://api.anthropic.com/v1/messages \
+  -H "content-type: application/json" \
+  -H "x-api-key: $ANTHROPIC_API_KEY" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "anthropic-beta: computer-use-2025-01-24" \
+  -d '{
+    "model": "claude-3-7-sonnet-20250219",
+    "max_tokens": 1024,
+    "tools": [
+      {
+        "type": "computer_20250124",
+        "name": "computer",
+        "display_width_px": 1024,
+        "display_height_px": 768,
+        "display_number": 1
+      },
+      {
+        "type": "text_editor_20241022",
+        "name": "str_replace_editor"
+      },
+      {
+        "type": "bash_20241022",
+        "name": "bash"
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Save a picture of a cat to my desktop."
+      }
+    ],
+    "thinking": {
+      "type": "enabled",
+      "budget_tokens": 1024
+    }
+  }'
+
+
+
+How computer use works
+1. Provide Claude with computer use tools and a user prompt
+
+Add Anthropic-defined computer use tools to your API request. - Include a user prompt that might require these tools, e.g., “Save a picture of a cat to my desktop.”
+2. Claude decides to use a tool
+
+Claude loads the stored computer use tool definitions and assesses if any tools can help with the user’s query. - If yes, Claude constructs a properly formatted tool use request. - The API response has a stop_reason of tool_use, signaling Claude’s intent.
+3. Extract tool input, evaluate the tool on a computer, and return results
+
+On your end, extract the tool name and input from Claude’s request. - Use the tool on a container or Virtual Machine. - Continue the conversation with a new user message containing a tool_result content block.
+4. Claude continues calling computer use tools until it's completed the task
+
+Claude analyzes the tool results to determine if more tool use is needed or the task has been completed. - If Claude decides it needs another tool, it responds with another tool_use stop_reason and you should return to step 3. - Otherwise, it crafts a text response to the user.
+We refer to the repetition of steps 3 and 4 without user input as the “agent loop” - i.e., Claude responding with a tool use request and your application responding to Claude with the results of evaluating that request.
+
+​
+The computing environment
+Computer use requires a sandboxed computing environment where Claude can safely interact with applications and the web. This environment includes:
+
+Virtual display: A virtual X11 display server (using Xvfb) that renders the desktop interface Claude will see through screenshots and control with mouse/keyboard actions.
+
+Desktop environment: A lightweight UI with window manager (Mutter) and panel (Tint2) running on Linux, which provides a consistent graphical interface for Claude to interact with.
+
+Applications: Pre-installed Linux applications like Firefox, LibreOffice, text editors, and file managers that Claude can use to complete tasks.
+
+Tool implementations: Integration code that translates Claude’s abstract tool requests (like “move mouse” or “take screenshot”) into actual operations in the virtual environment.
+
+Agent loop: A program that handles communication between Claude and the environment, sending Claude’s actions to the environment and returning the results (screenshots, command outputs) back to Claude.
+
+When you use computer use, Claude doesn’t directly connect to this environment. Instead, your application:
+
+Receives Claude’s tool use requests
+Translates them into actions in your computing environment
+Captures the results (screenshots, command outputs, etc.)
+Returns these results to Claude
+For security and isolation, the reference implementation runs all of this inside a Docker container with appropriate port mappings for viewing and interacting with the environment.
+
+
+How to implement computer use
+​
+Start with our reference implementation
+We have built a reference implementation that includes everything you need to get started quickly with computer use:
+
+A containerized environment suitable for computer use with Claude
+Implementations of the computer use tools
+An agent loop that interacts with the Anthropic API and executes the computer use tools
+A web interface to interact with the container, agent loop, and tools.
+​
+Understanding the multi-agent loop
+The core of computer use is the “agent loop” - a cycle where Claude requests tool actions, your application executes them, and returns results to Claude. Here’s a simplified example:
+
+async def sampling_loop(
+    *,
+    model: str,
+    messages: list[dict],
+    api_key: str,
+    max_tokens: int = 4096,
+    tool_version: str,
+    thinking_budget: int | None = None,
+    max_iterations: int = 10,  # Add iteration limit to prevent infinite loops
+):
+    """
+    A simple agent loop for Claude computer use interactions.
+
+    This function handles the back-and-forth between:
+    1. Sending user messages to Claude
+    2. Claude requesting to use tools
+    3. Your app executing those tools
+    4. Sending tool results back to Claude
+    """
+    # Set up tools and API parameters
+    client = Anthropic(api_key=api_key)
+    beta_flag = "computer-use-2025-01-24" if "20250124" in tool_version else "computer-use-2024-10-22"
+
+    # Configure tools - you should already have these initialized elsewhere
+    tools = [
+        {"type": f"computer_{tool_version}", "name": "computer", "display_width_px": 1024, "display_height_px": 768},
+        {"type": f"text_editor_{tool_version}", "name": "str_replace_editor"},
+        {"type": f"bash_{tool_version}", "name": "bash"}
+    ]
+
+    # Main agent loop (with iteration limit to prevent runaway API costs)
+    iterations = 0
+    while True and iterations < max_iterations:
+        iterations += 1
+        # Set up optional thinking parameter (for Claude 3.7 Sonnet)
+        thinking = None
+        if thinking_budget:
+            thinking = {"type": "enabled", "budget_tokens": thinking_budget}
+
+        # Call the Claude API
+        response = client.beta.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=messages,
+            tools=tools,
+            betas=[beta_flag],
+            thinking=thinking
+        )
+
+        # Add Claude's response to the conversation history
+        response_content = response.content
+        messages.append({"role": "assistant", "content": response_content})
+
+        # Check if Claude used any tools
+        tool_results = []
+        for block in response_content:
+            if block.type == "tool_use":
+                # In a real app, you would execute the tool here
+                # For example: result = run_tool(block.name, block.input)
+                result = {"result": "Tool executed successfully"}
+
+                # Format the result for Claude
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result
+                })
+
+        # If no tools were used, Claude is done - return the final messages
+        if not tool_results:
+            return messages
+
+        # Add tool results to messages for the next iteration with Claude
+        messages.append({"role": "user", "content": tool_results})
+
+
+When using tools with 20250124 in their type (Claude 3.7 Sonnet tools), include this beta flag: "betas": ["computer-use-2025-01-24"] Note: The Bash (bash_20250124) and Text Editor (text_editor_20250124) tools are generally available for Claude 3.5 Sonnet (new) as well and can be used without the computer use beta header.
+
+Understand Anthropic-defined tools
+As a beta, these tool definitions are subject to change.
+We have provided a set of tools that enable Claude to effectively use computers. When specifying an Anthropic-defined tool, description and tool_schema fields are not necessary or allowed.
+
+Anthropic-defined tools are user executed
+
+Anthropic-defined tools are defined by Anthropic but you must explicitly evaluate the results of the tool and return the tool_results to Claude. As with any tool, the model does not automatically execute the tool.
+
+We provide a set of Anthropic-defined tools, with each tool having versions optimized for both Claude 3.5 Sonnet (new) and Claude 3.7 Sonnet:
+
+
+Claude 3.7 Sonnet tools
+
+The following enhanced tools can be used with Claude 3.7 Sonnet:
+
+{ "type": "computer_20250124", "name": "computer" } - Includes new actions for more precise control
+{ "type": "text_editor_20250124", "name": "str_replace_editor" } - Same capabilities as 20241022 version
+{ "type": "bash_20250124", "name": "bash" } - Same capabilities as 20241022 version
+When using Claude 3.7 Sonnet, you can also enable the extended thinking capability to understand the model’s reasoning process
+
