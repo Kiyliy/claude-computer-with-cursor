@@ -16,32 +16,23 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-// 添加请求头信息以帮助调试
-const originalRequest = anthropic.clientConfig.httpClient.request;
-anthropic.clientConfig.httpClient.request = async function(options) {
+// 改为简单地记录初始化信息，不再尝试拦截请求
+logger.debug('ClaudeAPI', 'Anthropic client initialized successfully');
+
+// 添加简单的包装函数，在后续实际调用 API 时添加日志
+async function callCloudeAPIWithLogging(apiCallFn) {
   const startTime = Date.now();
   const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2);
   
-  logger.debug('ClaudeAPI', 'Sending request to Anthropic API', {
-    requestId,
-    method: options.method,
-    path: options.path,
-    host: options.hostname,
-    port: options.port,
-    headers: options.headers,
-    timeout: options.timeout,
-    contentLength: options.headers['content-length']
-  });
+  logger.debug('ClaudeAPI', 'Preparing to call Anthropic API', { requestId });
   
   try {
-    const response = await originalRequest.apply(this, arguments);
+    const response = await apiCallFn();
     
     const duration = Date.now() - startTime;
     logger.debug('ClaudeAPI', `Received response from Anthropic API in ${duration}ms`, {
       requestId,
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers
+      duration
     });
     
     return response;
@@ -53,22 +44,12 @@ anthropic.clientConfig.httpClient.request = async function(options) {
       message: error.message,
       name: error.name,
       code: error.code,
-      status: error.status,
-      statusText: error.statusText,
-      request: {
-        method: options.method,
-        path: options.path,
-        host: options.hostname
-      },
-      headers: error.response?.headers,
-      responseData: error.response?.data
+      status: error.status
     });
     
     throw error;
   }
-};
-
-logger.debug('ClaudeAPI', 'Anthropic client initialized with request interceptor');
+}
 
 /**
  * Get cursor instructions from Claude based on screen capture and context
@@ -163,18 +144,21 @@ Use mouse movements, clicks, and drags to help the user with their programming t
       const apiCallStartTime = Date.now();
       
       try {
-        const response = await anthropic.messages.create({
-          model: "claude-3-7-sonnet-20250219",
-          max_tokens: 4000,
-          system: systemPrompt,
-          messages: messages,
-          tools: tools,
-          thinking: {
-            type: "enabled",
-            budget_tokens: 1024
-          },
-          anthropic_version: "2023-06-01",  
-          beta: "computer-use-2025-01-24"
+        // 使用包装函数来调用 API
+        const response = await callCloudeAPIWithLogging(async () => {
+          return await anthropic.messages.create({
+            model: "claude-3-7-sonnet-20250219",
+            max_tokens: 4000,
+            system: systemPrompt,
+            messages: messages,
+            tools: tools,
+            thinking: {
+              type: "enabled",
+              budget_tokens: 1024
+            },
+            anthropic_version: "2023-06-01",  
+            beta: "computer-use-2025-01-24"
+          });
         });
         
         const apiCallDuration = Date.now() - apiCallStartTime;
