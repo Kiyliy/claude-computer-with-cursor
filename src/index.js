@@ -8,7 +8,60 @@ const logger = require('./utils/logger');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+// 添加详细请求日志中间件
+app.use((req, res, next) => {
+  const startTime = Date.now();
+  const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+  
+  logger.debug('Server', `Received ${req.method} request for ${req.path}`, {
+    requestId,
+    method: req.method,
+    path: req.path,
+    query: req.query,
+    headers: req.headers,
+    ip: req.ip,
+    contentLength: req.headers['content-length']
+  });
+  
+  // 响应完成后记录详细信息
+  res.on('finish', () => {
+    const duration = Date.now() - startTime;
+    logger.info('Server', `Completed ${req.method} ${req.path} with status ${res.statusCode} in ${duration}ms`, {
+      requestId,
+      method: req.method,
+      path: req.path,
+      statusCode: res.statusCode,
+      duration
+    });
+  });
+  
+  // 响应关闭（可能是客户端断开连接）
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      logger.warn('Server', `Connection closed before response completion for ${req.method} ${req.path}`, {
+        requestId,
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        duration: Date.now() - startTime
+      });
+    }
+  });
+  
+  next();
+});
+
+app.use(express.json({
+  limit: '50mb', // 增加请求体大小限制
+  verify: (req, res, buf, encoding) => {
+    if (buf.length > 1024 * 1024 * 10) { // 10MB
+      logger.warn('Server', 'Large request body detected', {
+        size: buf.length,
+        path: req.path
+      });
+    }
+  }
+}));
 
 // Initialize cursor controller
 const cursorController = {
@@ -142,14 +195,28 @@ app.post('/cursor-action', async (req, res) => {
 // API endpoint to perform pair programming
 app.post('/pair-program', async (req, res) => {
   const { screenCapture, context, goal } = req.body;
+  const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2);
   
   logger.info('API', 'Received pair programming request', { 
+    requestId,
     goal,
     context: {
-      workType: context.workType,
-      environment: context.environment
-    }
+      workType: context?.workType,
+      environment: context?.environment
+    },
+    screenCaptureSize: screenCapture?.length || 0
   });
+  
+  // 检查请求参数
+  if (!screenCapture) {
+    logger.warn('API', 'Missing screenCapture in request', { requestId });
+    return res.status(400).json({ error: 'Missing screenCapture' });
+  }
+  
+  if (!goal) {
+    logger.warn('API', 'Missing goal in request', { requestId });
+    return res.status(400).json({ error: 'Missing goal' });
+  }
   
   try {
     logger.debug('API', 'Preparing to get cursor instructions from Claude');
@@ -214,7 +281,7 @@ app.post('/pair-program', async (req, res) => {
 });
 
 // Start the server
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   logger.info('Server', `Cursor operator server running on port ${PORT}`);
   
   // Log system information
@@ -224,6 +291,7 @@ app.listen(PORT, () => {
   logger.info('Server', 'System information', {
     node: process.version,
     platform: process.platform,
+    port: PORT,
     screenSize,
     cursorPosition
   });
@@ -231,4 +299,36 @@ app.listen(PORT, () => {
   console.log(`Cursor operator server running on port ${PORT}`);
   console.log(`Screen size: ${JSON.stringify(screenSize)}`);
   console.log(`Current cursor position: ${JSON.stringify(cursorPosition)}`);
+});
+
+// 添加服务器错误处理
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    logger.error('Server', `Port ${PORT} is already in use. Unable to start server.`, {
+      error: error.message,
+      stack: error.stack,
+      code: error.code
+    });
+  } else {
+    logger.error('Server', 'Server error', {
+      error: error.message,
+      stack: error.stack,
+      code: error.code
+    });
+  }
+});
+
+// 处理未捕获的异常
+process.on('uncaughtException', (error) => {
+  logger.error('Process', 'Uncaught exception', {
+    error: error.message,
+    stack: error.stack
+  });
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Process', 'Unhandled rejection', {
+    reason: reason instanceof Error ? reason.message : reason,
+    stack: reason instanceof Error ? reason.stack : undefined
+  });
 });

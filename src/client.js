@@ -117,19 +117,47 @@ class CursorOperatorClient {
       logger.debug('Client', 'Sending pair programming request to server');
       const startTime = Date.now();
       
-      const response = await this.client.post('/pair-program', {
-        screenCapture,
-        context,
-        goal
+      logger.debug('Client', 'Network request details', { 
+        method: 'POST',
+        url: `${this.serverUrl}/pair-program`,
+        dataSize: screenCapture.length,
+        timeout: this.client.defaults.timeout
       });
       
-      const elapsedTime = Date.now() - startTime;
-      logger.info('Client', `Pair programming completed in ${elapsedTime}ms`, { 
-        actionsPerformed: response.data.actionsPerformed,
-        finalPosition: response.data.finalPosition
-      });
-      
-      return response.data;
+      try {
+        const response = await this.client.post('/pair-program', {
+          screenCapture,
+          context,
+          goal
+        });
+        
+        const elapsedTime = Date.now() - startTime;
+        logger.info('Client', `Pair programming completed in ${elapsedTime}ms`, { 
+          actionsPerformed: response.data.actionsPerformed,
+          finalPosition: response.data.finalPosition
+        });
+        
+        return response.data;
+      } catch (axiosError) {
+        logger.error('Client', 'Network error details', {
+          message: axiosError.message,
+          code: axiosError.code,
+          isAxiosError: axiosError.isAxiosError,
+          request: axiosError.request ? {
+            method: axiosError.config?.method,
+            url: axiosError.config?.url,
+            baseURL: axiosError.config?.baseURL,
+          } : null,
+          response: axiosError.response ? {
+            status: axiosError.response.status,
+            statusText: axiosError.response.statusText,
+            headers: axiosError.response.headers,
+            data: axiosError.response.data
+          } : null
+        });
+        
+        throw axiosError;
+      }
     } catch (error) {
       logger.error('Client', 'Error during pair programming', { 
         error: error.message, 

@@ -7,6 +7,7 @@ logger.info('ClaudeAPI', 'Initializing Anthropic client');
 
 if (!process.env.ANTHROPIC_API_KEY) {
   logger.error('ClaudeAPI', 'ANTHROPIC_API_KEY is not set in environment variables');
+  throw new Error('ANTHROPIC_API_KEY is not set in environment variables. Please set this environment variable before starting the server.');
 } else {
   logger.debug('ClaudeAPI', 'ANTHROPIC_API_KEY is set');
 }
@@ -15,7 +16,59 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
-logger.debug('ClaudeAPI', 'Anthropic client initialized');
+// 添加请求头信息以帮助调试
+const originalRequest = anthropic.clientConfig.httpClient.request;
+anthropic.clientConfig.httpClient.request = async function(options) {
+  const startTime = Date.now();
+  const requestId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+  
+  logger.debug('ClaudeAPI', 'Sending request to Anthropic API', {
+    requestId,
+    method: options.method,
+    path: options.path,
+    host: options.hostname,
+    port: options.port,
+    headers: options.headers,
+    timeout: options.timeout,
+    contentLength: options.headers['content-length']
+  });
+  
+  try {
+    const response = await originalRequest.apply(this, arguments);
+    
+    const duration = Date.now() - startTime;
+    logger.debug('ClaudeAPI', `Received response from Anthropic API in ${duration}ms`, {
+      requestId,
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+    
+    return response;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    
+    logger.error('ClaudeAPI', `Error in Anthropic API request after ${duration}ms`, {
+      requestId,
+      message: error.message,
+      name: error.name,
+      code: error.code,
+      status: error.status,
+      statusText: error.statusText,
+      request: {
+        method: options.method,
+        path: options.path,
+        host: options.hostname
+      },
+      headers: error.response?.headers,
+      responseData: error.response?.data
+    });
+    
+    throw error;
+  }
+};
+
+logger.debug('ClaudeAPI', 'Anthropic client initialized with request interceptor');
 
 /**
  * Get cursor instructions from Claude based on screen capture and context
@@ -126,6 +179,18 @@ Use mouse movements, clicks, and drags to help the user with their programming t
         
         const apiCallDuration = Date.now() - apiCallStartTime;
         logger.info('ClaudeAPI', `Claude API call completed in ${apiCallDuration}ms`);
+        
+        // 记录更详细的响应信息
+        logger.debug('ClaudeAPI', 'Claude API response details', {
+          id: response.id,
+          model: response.model,
+          type: response.type,
+          role: response.role,
+          contentLength: response.content.length,
+          usage: response.usage,
+          stopReason: response.stop_reason,
+          stopSequence: response.stop_sequence
+        });
         
         if (response.thinking) {
           logger.debug('ClaudeAPI', 'Claude thinking process', {
