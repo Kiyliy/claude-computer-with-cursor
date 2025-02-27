@@ -11,6 +11,7 @@ const rl = readline.createInterface({
 
 class CursorOperatorClient {
   constructor(serverUrl = `http://localhost:${process.env.PORT || 3000}`) {
+    console.log(`Using server URL: ${serverUrl}`);
     this.serverUrl = serverUrl;
     this.client = axios.create({
       baseURL: serverUrl,
